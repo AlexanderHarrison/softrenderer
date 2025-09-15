@@ -163,13 +163,17 @@ static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
     };
     for (int i = 0; i < 9; ++i)
         vc[i] *= 255.f;
-    
+        
+        
+    // TODO: add viewport oob checks
+    // TODO: reduce oob calculations somehow
+
     for (ISize y_i = y_i_start; y_i < y_i_end; y_i += 1) {
         // TODO: oob checks
         for (ISize x_i = x_i_start; x_i < x_i_end; x_i += 8) {
             F32_8 x = _mm256_set1_ps((F32)x_i);
             F32_8 y = _mm256_set1_ps((F32)y_i);
-            F32_8 ints = _mm256_set_ps(7.f, 6.f, 5.f, 4.f, 3.f, 2.f, 1.f, 0.f);
+            F32_8 ints = _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
             x = _mm256_add_ps(x, ints);
             
             F32_8 x_incs = _mm256_set1_ps(x_inc);
@@ -182,17 +186,15 @@ static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
             x = _mm256_add_ps(x, x_starts);
             y = _mm256_add_ps(y, y_starts);
             
-            Vtx_8 bary = CalcBarycentric_8(x, y, v1, v2, v3, area_recip); // ~1.6ms
+            Vtx_8 bary = CalcBarycentric_8(x, y, v1, v2, v3, area_recip);
             U32_8 tri_outside = OutsideTri_8(bary);
-            
-            // ~ %40 before here
             
             int mask = _mm256_movemask_ps((F32_8)tri_outside);
             if (mask == 0xff)
                 continue;
             
             F32 *depth_row = &depth[(USize)y_i*depth_width + (USize)x_i];
-            F32_8 cur_depth = _mm256_loadu_ps(depth_row); // TODO masked load based on oob vector
+            F32_8 cur_depth = _mm256_loadu_ps(depth_row); // TODO: masked load based on oob vector
             
             F32_8 z = TriInterpolate_8(bary, v1->z, v2->z, v3->z);
             U32_8 z_good = (U32_8)_mm256_cmp_ps(z, cur_depth, _CMP_GE_OQ);
@@ -204,7 +206,7 @@ static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
                 
             _mm256_maskstore_ps(depth_row, write_pixel, z);
             
-            // TODO oob and here
+            // TODO: oob and here
             
             F32_8 r = TriInterpolate_8(bary, vc[0], vc[1], vc[2]);
             F32_8 g = TriInterpolate_8(bary, vc[3], vc[4], vc[5]);
@@ -215,24 +217,20 @@ static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
             b = (F32_8)_mm256_cvtps_epi32(b);
             F32_8 a = (F32_8)_mm256_set1_epi32(255);
             
-            // [ 0 r 0 r  0 r 0 r  0 g 0 g  0 g 0 g  0 r 0 r  0 r 0 r  0 g 0 g  0 g 0 g ]
+            // rg     = [0r0r 0r0r 0g0g 0g0g 0r0r 0r0r 0g0g 0g0g]
+            // ba     = [0b0b 0b0b 0a0a 0a0a 0b0b 0b0b 0a0a 0a0a]
+            // rgba   = [rrrr gggg bbbb aaaa rrrr gggg bbbb aaaa]
+            // colour = [rgba rgba rgba rgba rgba rgba rgba rgba]
             U32_8 rg = _mm256_packus_epi32((U32_8)r, (U32_8)g);
-            
-            // [ 0 b 0 b  0 b 0 b  0 a 0 a  0 a 0 a  0 b 0 b  0 b 0 b  0 a 0 a  0 a 0 a ]
             U32_8 ba = _mm256_packus_epi32((U32_8)b, (U32_8)a);
-            
-            // [ r r r r  g g g g  b b b b  a a a a  r r r r  g g g g  b b b b  a a a a ]
             U32_8 rgba = _mm256_packus_epi16(rg, ba);
             
             #define R(A) A+0, A+4, A+8, A+12
-            U32_8 shuffle = _mm256_set_epi8(
-                R(19), R(18), R(17), R(16),
-                R(3), R(2), R(1), R(0)
-            );
+            U32_8 shuffle = _mm256_set_epi8(R(19), R(18), R(17), R(16), R(3), R(2), R(1), R(0));
             F32_8 colour = (F32_8)_mm256_shuffle_epi8(rgba, shuffle);
             
             F32 *target = (F32*)(tex.pixels + (USize)y_i*tex.pitch + (USize)x_i*4);
-            _mm256_maskstore_ps(target, write_pixel, colour); // masked store takes 1/6 compared to unmasked store
+            _mm256_maskstore_ps(target, write_pixel, colour);
         }
     }
 }
