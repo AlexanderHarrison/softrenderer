@@ -78,6 +78,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
     return SDL_APP_CONTINUE;
 }
 
+// static U8 pixels[1920*1080*4];
+// static USize pitch = 1920*4;
+
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
     (void)appstate;
