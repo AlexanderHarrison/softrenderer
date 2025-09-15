@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <byteswap.h>
 #include <math.h>
+#include <immintrin.h>
 
 #define countof(A) ((sizeof(A)/sizeof(*(A))))
 
@@ -25,7 +26,8 @@ typedef int32_t I32;
 typedef int16_t I16;
 typedef int8_t I8;
 
-#include "softrenderer.c"
+// #include "softrenderer.c"
+#include "softrenderer-avx.c"
 
 static SDL_Window *window;
 static SDL_Renderer *renderer;
