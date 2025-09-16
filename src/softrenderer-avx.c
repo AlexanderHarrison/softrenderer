@@ -5,6 +5,11 @@ typedef struct Tex {
     USize width, height, pitch;
 } Tex;
 
+typedef struct Depth {
+    F32 *pixels;
+    USize width, height, pitch;
+} Depth;
+
 typedef union RGBA {
     struct {
         U8 r, g, b, a;
@@ -46,7 +51,6 @@ static inline Vtx_8 CalcBarycentric_8(F32_8 x, F32_8 y, Vtx *v1, Vtx *v2, Vtx *v
     F32_8 v2_y = _mm256_set1_ps(v2->y);
     F32_8 v3_x = _mm256_set1_ps(v3->x);
     F32_8 v3_y = _mm256_set1_ps(v3->y);
-    // return (Vtx_8) { v1_x, v1_y, v2_x };
 
     F32_8 a23 = CalcArea_8(x, y, v2_x, v2_y, v3_x, v3_y);
     F32_8 a31 = CalcArea_8(v1_x, v1_y, x, y, v3_x, v3_y);
@@ -75,30 +79,8 @@ static inline U32_8 OutsideTri_8(Vtx_8 bary) {
     return (U32_8)o;
 }
 
-static struct timespec timer;
-void timer_start(void) {
-    clock_gettime(CLOCK_MONOTONIC, &timer);
-}
-
-F64 timer_elapsed_us(void) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    struct timespec diff = now;
-    diff.tv_sec -= timer.tv_sec;
-    diff.tv_nsec -= timer.tv_nsec;
-    F64 time_us = (F64)diff.tv_sec * 1000000.0 + (F64)diff.tv_nsec / 1000.0;
-    return time_us;
-}
-void timer_elapsed(const char *label) {
-    printf("%s: %fus\n", label, timer_elapsed_us());
-}
-
-static F32 *depth;
-USize depth_width = 0;
-USize depth_height = 0;
-
 __attribute__((noinline))
-static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
+static void RenderTri(Tex tex, Depth depth, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
     F32 w = (F32)tex.width;
     F32 h = (F32)tex.height;
     F32 wr = 1.f / w;
@@ -163,18 +145,16 @@ static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
     };
     for (int i = 0; i < 9; ++i)
         vc[i] *= 255.f;
-        
-        
-    // TODO: add viewport oob checks
-    // TODO: reduce oob calculations somehow
 
     for (ISize y_i = y_i_start; y_i < y_i_end; y_i += 1) {
-        // TODO: oob checks
         for (ISize x_i = x_i_start; x_i < x_i_end; x_i += 8) {
             F32_8 x = _mm256_set1_ps((F32)x_i);
             F32_8 y = _mm256_set1_ps((F32)y_i);
             F32_8 ints = _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
             x = _mm256_add_ps(x, ints);
+            
+            F32_8 x_i_end_ymm = _mm256_set1_ps((F32)x_i_end);
+            U32_8 in_bounds = (U32_8)_mm256_cmp_ps(x, x_i_end_ymm, _CMP_LT_OQ);
             
             F32_8 x_incs = _mm256_set1_ps(x_inc);
             F32_8 y_incs = _mm256_set1_ps(y_inc);
@@ -188,25 +168,24 @@ static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
             
             Vtx_8 bary = CalcBarycentric_8(x, y, v1, v2, v3, area_recip);
             U32_8 tri_outside = OutsideTri_8(bary);
-            
-            int mask = _mm256_movemask_ps((F32_8)tri_outside);
-            if (mask == 0xff)
+            U32_8 write_pixel = (U32_8)_mm256_andnot_ps((F32_8)tri_outside, (F32_8)in_bounds);
+
+            int mask = _mm256_movemask_ps((F32_8)write_pixel);
+            if (mask == 0)
                 continue;
             
-            F32 *depth_row = &depth[(USize)y_i*depth_width + (USize)x_i];
-            F32_8 cur_depth = _mm256_loadu_ps(depth_row); // TODO: masked load based on oob vector
+            F32 *depth_row = &depth.pixels[(USize)y_i*depth.width + (USize)x_i];
+            F32_8 cur_depth = _mm256_maskload_ps(depth_row, in_bounds);
             
             F32_8 z = TriInterpolate_8(bary, v1->z, v2->z, v3->z);
             U32_8 z_good = (U32_8)_mm256_cmp_ps(z, cur_depth, _CMP_GE_OQ);
-            U32_8 write_pixel = (U32_8)_mm256_andnot_ps((F32_8)tri_outside, (F32_8)z_good);
+            write_pixel = (U32_8)_mm256_and_ps((F32_8)write_pixel, (F32_8)z_good);
             
             mask = _mm256_movemask_ps((F32_8)write_pixel);
             if (mask == 0)
                 continue;
                 
             _mm256_maskstore_ps(depth_row, write_pixel, z);
-            
-            // TODO: oob and here
             
             F32_8 r = TriInterpolate_8(bary, vc[0], vc[1], vc[2]);
             F32_8 g = TriInterpolate_8(bary, vc[3], vc[4], vc[5]);
@@ -233,129 +212,4 @@ static void RenderTri_8(Tex tex, Vtx *vtx, U16 *idx, Vtx *vtx_colour) {
             _mm256_maskstore_ps(target, write_pixel, colour);
         }
     }
-}
-
-static Vtx cube_verts[] = {
-    { -1, -1, -1 },
-    { -1, -1,  1 },
-    { -1,  1, -1 },
-    
-    { -1,  1,  1 },
-    {  1, -1, -1 },
-    {  1, -1,  1 },
-    {  1,  1, -1 },
-    {  1,  1,  1 },
-};
-static Vtx cube_colours[] = {
-    { 0.2f, 0.2f, 0.2f },
-    { 0, 0, 1 },
-    { 0, 1, 0 },
-    { 0, 1, 1 },
-    { 1, 0, 0 },
-    { 1, 0, 1 },
-    { 1, 1, 0 },
-    { 1, 1, 1 },
-};
-static Vtx cube_verts_tform[countof(cube_verts)];
-static U16 cube_indices[] = {
-    0, 2, 1,
-    1, 2, 3,
-    2, 7, 3,
-    3, 7, 1,
-    7, 5, 1, // TRI FOR BENCHMARKING
-    1, 5, 0,
-    5, 4, 0,
-    0, 4, 2,
-    4, 6, 2,
-    2, 6, 7,
-    6, 4, 7,
-    7, 4, 5,
-};
-
-void SoftRender(Tex tex) {
-    static F32 i = 100;
-    i += 1;
-    
-    if (tex.width != depth_width || tex.height != depth_height) {
-        depth_width = tex.width;
-        depth_height = tex.height;
-        USize new_size = tex.width * tex.height * sizeof(*depth);
-        if (depth)
-            depth = realloc(depth, new_size);
-        else
-            depth = malloc(new_size);
-    }
-    memset(depth, 0, depth_width*depth_height*sizeof(*depth));
-    
-    for (USize y = 0; y < tex.height; ++y) {
-        for (USize x = 0; x < tex.width; ++x) {
-            SetPixel(tex, x, y, (RGBA) {{ 0, 0, 0, 255 }});
-        }
-    }
-    
-    F32 t = i * 3.141592654f * 2.f / 1000.f;
-    F32 cos_t = cosf(t);
-    F32 sin_t = sinf(t);
-    
-    static F64 sum = 0.0;
-    static F64 count = 0.0;
-    
-    for (F32 x_t = -1.0; x_t <= 1.0; x_t += 0.3f) {
-        for (F32 y_t = -1.0; y_t <= 1.0; y_t += 0.3f) {
-            for (USize v_i = 0; v_i < countof(cube_verts); ++v_i) {
-                Vtx v = cube_verts[v_i];
-                
-                // scale
-                v.x *= 0.1f;
-                v.y *= 0.1f;
-                v.z *= 0.1f;
-                
-                // rotate around x axis
-                {
-                    F32 y = v.y;
-                    F32 z = v.z;
-                    v.y = y*cos_t - z*sin_t;
-                    v.z = y*sin_t + z*cos_t;
-                }
-                
-                // rotate around y axis
-                {
-                    F32 x = v.x;
-                    F32 z = v.z;
-                    v.x = x*cos_t - z*sin_t;
-                    v.z = x*sin_t + z*cos_t;
-                }
-                
-                // rotate around z axis
-                {
-                    F32 x = v.x;
-                    F32 y = v.y;
-                    v.x = x*cos_t - y*sin_t;
-                    v.y = x*sin_t + y*cos_t;
-                }
-                
-                // translate
-                v.x += x_t;
-                v.y += y_t;
-                
-                // scale z from -1..1 to 0..1
-                v.z = v.z * 0.5f + 0.5f;
-                
-                F32 aspect = (F32)tex.width / (F32)tex.height;
-                v.x /= aspect;
-                
-                cube_verts_tform[v_i] = v;
-            }
-            
-            timer_start();
-            for (USize idx_i = 0; idx_i < countof(cube_indices); idx_i += 3) {
-                RenderTri_8(tex, cube_verts_tform, cube_indices+idx_i, cube_colours);
-            }
-            sum += timer_elapsed_us();
-        }
-    }
-    count++;
-    printf("RenderTris: %f\n", sum / count);
-    
-    // timer_elapsed("RenderTris");
 }

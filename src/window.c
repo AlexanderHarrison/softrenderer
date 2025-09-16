@@ -27,16 +27,18 @@ typedef int16_t I16;
 typedef int8_t I8;
 
 // #include "softrenderer.c"
-#include "softrenderer-avx.c"
+// #include "softrenderer-avx.c"
+#include "softrenderer-tight.c"
+#include "scene.c"
 
 static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *rgba;
 
-// static USize window_width = 640;
-// static USize window_height = 480;
-static USize window_width = 1920;
-static USize window_height = 1080;
+static USize window_width = 800;
+static USize window_height = 600;
+// static USize window_width = 1920;
+// static USize window_height = 1080;
 
 #define Expect_SDL(A) do {\
     if (!(A)) {\
@@ -91,7 +93,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         SDL_LockTexture(rgba, NULL, (void**)&pixels, &pitch)
     );
     
-    SoftRender((Tex) { pixels, window_width, window_height, (USize)pitch });
+    RenderScene((Tex) { pixels, window_width, window_height, (USize)pitch });
     
     SDL_UnlockTexture(rgba);
     
