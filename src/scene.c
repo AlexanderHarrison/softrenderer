@@ -1,7 +1,7 @@
-// #include "softrenderer.c"
-// #include "softrenderer-avx.c"
-// #include "softrenderer-tight.c"
-// #include "softrenderer-tight-avx.c"
+// #include "softr.c"
+// #include "softr-avx.c"
+// #include "softr-tight.c"
+#include "softr-tight-avx.c"
 
 static Vtx cube_verts[] = {
     { -1, -1, -1 },
