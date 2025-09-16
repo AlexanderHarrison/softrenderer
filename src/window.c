@@ -26,9 +26,6 @@ typedef int32_t I32;
 typedef int16_t I16;
 typedef int8_t I8;
 
-// #include "softrenderer.c"
-// #include "softrenderer-avx.c"
-#include "softrenderer-tight.c"
 #include "scene.c"
 
 static SDL_Window *window;
